@@ -1,0 +1,95 @@
+name: 每日重要新闻（自动 / 手动）
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('手动运行：{0}，{1} 条', inputs.operation, inputs.max_items)
+      || '每日定时发送新闻邮件' }}
+
+on:
+  schedule:
+    - cron: "15 7 * * *"
+      timezone: "Asia/Tokyo"
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "执行方式：send 会立即发邮件；preview 只生成预览"
+        required: true
+        default: "send"
+        type: choice
+        options:
+          - send
+          - preview
+      max_items:
+        description: "本次邮件包含的新闻条数"
+        required: true
+        default: "12"
+        type: choice
+        options:
+          - "6"
+          - "12"
+          - "20"
+      lookback_hours:
+        description: "本次抓取最近多少小时的新闻"
+        required: true
+        default: "36"
+        type: choice
+        options:
+          - "24"
+          - "36"
+          - "72"
+      subject_prefix:
+        description: "本次邮件标题前缀；留空则使用默认值"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-important-news
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Fetch news and send or preview email
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'preview' }}
+          SMTP_HOST: ${{ vars.SMTP_HOST || 'smtp.gmail.com' }}
+          SMTP_PORT: ${{ vars.SMTP_PORT || '465' }}
+          SMTP_SECURITY: ${{ vars.SMTP_SECURITY || 'ssl' }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_FROM_NAME: ${{ vars.EMAIL_FROM_NAME || '每日重要新闻' }}
+          EMAIL_SUBJECT_PREFIX: ${{ inputs.subject_prefix || vars.EMAIL_SUBJECT_PREFIX || '每日重要新闻' }}
+          NEWS_MAX_ITEMS: ${{ inputs.max_items || vars.NEWS_MAX_ITEMS || '12' }}
+          NEWS_LOOKBACK_HOURS: ${{ inputs.lookback_hours || vars.NEWS_LOOKBACK_HOURS || '36' }}
+          NEWS_MAX_SELECTED_PER_SOURCE: ${{ vars.NEWS_MAX_SELECTED_PER_SOURCE || '3' }}
+          NEWS_MAX_SELECTED_PER_CATEGORY: ${{ vars.NEWS_MAX_SELECTED_PER_CATEGORY || '4' }}
+          NEWS_TIMEZONE: ${{ vars.NEWS_TIMEZONE || 'Asia/Tokyo' }}
+        run: python src/daily_news.py
+
+      - name: Upload email preview
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'preview' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: email-preview
+          path: output/
+          if-no-files-found: error
+          retention-days: 3
