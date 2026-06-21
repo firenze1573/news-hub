@@ -81,8 +81,10 @@ jobs:
           NEWS_MAX_ITEMS: ${{ inputs.max_items || vars.NEWS_MAX_ITEMS || '12' }}
           NEWS_LOOKBACK_HOURS: ${{ inputs.lookback_hours || vars.NEWS_LOOKBACK_HOURS || '36' }}
           NEWS_MAX_SELECTED_PER_SOURCE: ${{ vars.NEWS_MAX_SELECTED_PER_SOURCE || '3' }}
-          NEWS_MAX_SELECTED_PER_CATEGORY: ${{ vars.NEWS_MAX_SELECTED_PER_CATEGORY || '4' }}
+          NEWS_MAX_SELECTED_PER_CATEGORY: ${{ vars.NEWS_MAX_SELECTED_PER_CATEGORY || '3' }}
           NEWS_TIMEZONE: ${{ vars.NEWS_TIMEZONE || 'Asia/Tokyo' }}
+          TRANSLATION_EMAIL: ${{ secrets.TRANSLATION_EMAIL || secrets.SMTP_USERNAME }}
+          TRANSLATION_TIMEOUT: ${{ vars.TRANSLATION_TIMEOUT || '20' }}
         run: python src/daily_news.py
 
       - name: Upload email preview

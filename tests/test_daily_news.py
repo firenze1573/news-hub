@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -12,10 +13,15 @@ from daily_news import (  # noqa: E402
     Article,
     FeedSource,
     build_html,
+    build_chinese_summary,
+    classify_category,
+    contains_chinese,
     parse_feed,
+    prepare_articles,
     rank_and_deduplicate,
     send_email,
     titles_are_similar,
+    translate_text_mymemory,
 )
 
 
@@ -160,7 +166,7 @@ class DailyNewsTests(unittest.TestCase):
                 "",
                 now - timedelta(hours=1),
                 "Tech Source",
-                "科技",
+                "科技行业",
             )
         )
         ranked = rank_and_deduplicate(
@@ -171,7 +177,7 @@ class DailyNewsTests(unittest.TestCase):
             max_selected_per_category=3,
         )
         self.assertEqual(sum(item.category == "国际" for item in ranked), 3)
-        self.assertTrue(any(item.category == "科技" for item in ranked))
+        self.assertTrue(any(item.category == "科技行业" for item in ranked))
 
     def test_title_similarity(self) -> None:
         self.assertTrue(
@@ -187,6 +193,89 @@ class DailyNewsTests(unittest.TestCase):
             )
         )
 
+    def test_chinese_language_filter(self) -> None:
+        self.assertTrue(contains_chinese("人工智能行业迎来新的发展机会"))
+        self.assertFalse(contains_chinese("Artificial intelligence market update"))
+        self.assertFalse(contains_chinese("日本の人工知能市場が拡大している"))
+
+    def test_category_prioritizes_technology_industry(self) -> None:
+        article = Article(
+            "政府发布人工智能与大模型产业新政策",
+            "https://example.com/ai",
+            "政策涉及芯片、云计算和软件开发企业。",
+            None,
+            "科技新闻",
+            "政治",
+        )
+        self.assertEqual(classify_category(article), "科技行业")
+
+    def test_ai_substring_does_not_misclassify_politics(self) -> None:
+        article = Article(
+            "Bolivian president declares state of emergency",
+            "https://example.com/politics",
+            "Military units were deployed after anti-government protests.",
+            None,
+            "World News",
+            "国际",
+        )
+        self.assertEqual(classify_category(article), "政治")
+
+    def test_builds_chinese_summary_fallback(self) -> None:
+        article = Article(
+            "人工智能公司发布新模型 - 示例媒体",
+            "https://example.com/ai",
+            "English summary only",
+            None,
+            "科技新闻",
+            "科技行业",
+        )
+        summary = build_chinese_summary(article)
+        self.assertTrue(contains_chinese(summary))
+        self.assertIn("详情请点击标题查看原文", summary)
+
+    def test_prepare_articles_keeps_original_languages_and_classifies(self) -> None:
+        articles = [
+            Article(
+                "软件开发行业发布新的人工智能工具",
+                "https://example.com/zh",
+                "新工具面向开发者和云计算团队。",
+                None,
+                "科技新闻",
+                "科技行业",
+            ),
+            Article(
+                "New software development tool released",
+                "https://example.com/en",
+                "English summary",
+                None,
+                "Tech News",
+                "科技行业",
+            ),
+        ]
+        prepared = prepare_articles(articles)
+        self.assertEqual(len(prepared), 2)
+        self.assertEqual(prepared[0].category, "科技行业")
+        self.assertEqual(prepared[1].category, "科技行业")
+
+    @patch("daily_news.urlopen")
+    def test_mymemory_translation_returns_chinese(self, urlopen) -> None:
+        payload = {
+            "responseData": {"translatedText": "人工智能市场迎来新的变化"},
+            "responseStatus": 200,
+        }
+        urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(
+            payload
+        ).encode("utf-8")
+        translated = translate_text_mymemory(
+            "The artificial intelligence market is changing",
+            source_language="en",
+            contact_email="owner@example.com",
+        )
+        self.assertEqual(translated, "人工智能市场迎来新的变化")
+        request = urlopen.call_args.args[0]
+        self.assertIn("langpair=en%7Czh-CN", request.full_url)
+        self.assertIn("de=owner%40example.com", request.full_url)
+
     def test_html_escapes_feed_content(self) -> None:
         now = datetime(2026, 6, 21, tzinfo=timezone.utc)
         article = Article(
@@ -195,7 +284,7 @@ class DailyNewsTests(unittest.TestCase):
             "<b>Summary</b>",
             now,
             "Example & Co",
-            "科技",
+            "科技行业",
         )
         rendered = build_html([article], now, timezone.utc)
         self.assertNotIn("<script>", rendered)

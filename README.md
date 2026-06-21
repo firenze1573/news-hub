@@ -1,13 +1,15 @@
 # 每日重要新闻邮件
 
-每天从公开 RSS/Atom 新闻源抓取内容，按时效性、重大事件关键词和多源报道情况排序，然后通过 SMTP 发送一封 HTML 邮件。整个项目只使用 Python 标准库，不需要付费 API。
+每天从 BBC、The Guardian、NHK、Google News 等 RSS 新闻源抓取内容，按时效性、重大事件关键词和多源报道情况排序，再通过免费的 MyMemory 翻译 API 转成中文，最后通过 SMTP 发送一封分类清晰的 HTML 邮件。
 
 默认设置：
 
 - 每天 `07:15`（`Asia/Tokyo`）运行
 - 汇总最近 36 小时的新闻
 - 发送评分最高的 12 条
-- 支持中文、日文和英文新闻源
+- 英文和日文标题、摘要自动翻译成中文
+- 按政治、经济、科技行业、国际、日本、社会分组
+- 科技行业重点关注 AI、大模型、软件开发、云计算、半导体、网络安全和开发者工具
 - 支持 GitHub Actions 页面手动运行和“只预览、不发送”
 
 ## 一、部署到 GitHub
@@ -22,6 +24,7 @@
 | `SMTP_PASSWORD` | Gmail 的 16 位应用专用密码，不是登录密码 |
 | `EMAIL_TO` | 私人收件邮箱；多个地址用逗号分隔 |
 | `EMAIL_FROM` | 可选；通常留空，程序会使用 `SMTP_USERNAME` |
+| `TRANSLATION_EMAIL` | 可选；用于提升免费翻译额度，可与发件邮箱相同 |
 
 如果使用 Gmail，需要先为 Google 账号开启两步验证，再创建“应用专用密码”。
 
@@ -73,14 +76,14 @@ schedule:
 {
   "name": "某新闻源",
   "url": "https://example.com/rss.xml",
-  "category": "财经",
-  "language": "zh-CN",
+  "category": "经济",
+  "language": "en",
   "weight": 1.5,
   "enabled": true
 }
 ```
 
-`weight` 越高，该来源的新闻越容易进入邮件。程序会跳过失效的单个新闻源，只要还有其他来源可用就会继续发送。
+`weight` 越高，该来源的新闻越容易进入邮件。`language` 用于告诉翻译 API 原文语言，可填写 `en`、`ja` 或 `zh-CN`。程序会跳过失效的单个新闻源，只要还有其他来源可用就会继续发送。
 
 也可以在 GitHub Actions 的 **Variables** 中添加以下可选设置，无需改代码：
 
@@ -89,12 +92,19 @@ schedule:
 | `NEWS_MAX_ITEMS` | `12` | 每封邮件的新闻条数 |
 | `NEWS_LOOKBACK_HOURS` | `36` | 抓取多少小时内的内容 |
 | `NEWS_MAX_SELECTED_PER_SOURCE` | `3` | 单一新闻源最多入选多少条 |
-| `NEWS_MAX_SELECTED_PER_CATEGORY` | `4` | 单一类别优先最多入选多少条 |
+| `NEWS_MAX_SELECTED_PER_CATEGORY` | `3` | 单一类别优先最多入选多少条 |
 | `NEWS_TIMEZONE` | `Asia/Tokyo` | 邮件中的时间显示时区 |
+| `TRANSLATION_TIMEOUT` | `20` | 单次翻译请求超时秒数 |
 | `EMAIL_FROM_NAME` | `每日重要新闻` | 发件人显示名称 |
 | `EMAIL_SUBJECT_PREFIX` | `每日重要新闻` | 邮件标题前缀 |
 
-## 四、使用其他邮箱服务
+## 四、免费翻译
+
+项目使用 MyMemory 官方 REST API。匿名额度为每天 5,000 字符；提供联系邮箱后为每天 50,000 字符。工作流优先使用 Secret `TRANSLATION_EMAIL`，未设置时使用 `SMTP_USERNAME`。
+
+程序只翻译最终入选的新闻，减少额度消耗。翻译失败时任务会报错并停止，不会发送中英文混杂的邮件。MyMemory 单次请求最多接受 500 字节，因此程序会自动截取过长摘要。无需 API Key。
+
+## 五、使用其他邮箱服务
 
 在 Actions 的 **Variables** 中设置：
 
@@ -104,12 +114,12 @@ schedule:
 
 用户名和密码仍放在 **Secrets** 中。请以邮箱服务商当前提供的 SMTP 参数为准。
 
-## 五、本地演练
+## 六、本地演练
 
 需要 Python 3.11 或更新版本：
 
 ```bash
-DRY_RUN=true python src/daily_news.py
+TRANSLATION_EMAIL=your-email@example.com DRY_RUN=true python src/daily_news.py
 ```
 
 演练不会发送邮件，会生成：
@@ -125,4 +135,4 @@ python -m unittest discover -s tests -v
 
 ## 费用
 
-代码本身没有付费依赖。GitHub Actions 对公开仓库的标准托管运行器免费；私人仓库每月包含一定免费额度。这个任务每天只运行一次，通常只占用很少的 Actions 时间。
+代码本身没有付费依赖。MyMemory 提供免费翻译额度；GitHub Actions 对公开仓库的标准托管运行器免费，私人仓库每月包含一定免费额度。这个任务每天只运行一次，通常只占用很少的 Actions 时间。
