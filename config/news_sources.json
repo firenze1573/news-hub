@@ -1,0 +1,60 @@
+{
+  "settings": {
+    "timezone": "Asia/Tokyo",
+    "max_items": 12,
+    "lookback_hours": 36,
+    "max_per_source": 20,
+    "max_selected_per_source": 3,
+    "max_selected_per_category": 4
+  },
+  "sources": [
+    {
+      "name": "Google News 中文",
+      "url": "https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
+      "category": "综合",
+      "language": "zh-CN",
+      "weight": 2.0,
+      "enabled": true
+    },
+    {
+      "name": "NHK 主要新闻",
+      "url": "https://www3.nhk.or.jp/rss/news/cat0.xml",
+      "category": "日本",
+      "language": "ja",
+      "weight": 1.8,
+      "enabled": true
+    },
+    {
+      "name": "BBC World",
+      "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "category": "国际",
+      "language": "en",
+      "weight": 1.5,
+      "enabled": true
+    },
+    {
+      "name": "BBC Business",
+      "url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+      "category": "财经",
+      "language": "en",
+      "weight": 1.4,
+      "enabled": true
+    },
+    {
+      "name": "BBC Technology",
+      "url": "https://feeds.bbci.co.uk/news/technology/rss.xml",
+      "category": "科技",
+      "language": "en",
+      "weight": 1.3,
+      "enabled": true
+    },
+    {
+      "name": "The Guardian World",
+      "url": "https://www.theguardian.com/world/rss",
+      "category": "国际",
+      "language": "en",
+      "weight": 1.2,
+      "enabled": true
+    }
+  ]
+}
