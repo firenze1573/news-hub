@@ -11,6 +11,7 @@ import re
 import smtplib
 import ssl
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -18,7 +19,7 @@ from email.utils import formataddr, parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
@@ -26,6 +27,205 @@ from zoneinfo import ZoneInfo
 LOGGER = logging.getLogger("daily-news")
 USER_AGENT = "DailyNewsMailer/1.0 (+https://github.com/)"
 MAX_FEED_BYTES = 5 * 1024 * 1024
+CATEGORY_ORDER = ("政治", "经济", "科技行业", "国际", "日本", "社会")
+CATEGORY_CLASSIFICATION_ORDER = ("科技行业", "经济", "政治", "日本", "国际")
+CATEGORY_COLORS = {
+    "政治": "#7c3aed",
+    "经济": "#047857",
+    "科技行业": "#0369a1",
+    "国际": "#b45309",
+    "日本": "#be123c",
+    "社会": "#4b5563",
+}
+
+CATEGORY_KEYWORDS = {
+    "科技行业": (
+        "人工智能",
+        "大模型",
+        "生成式ai",
+        "openai",
+        "anthropic",
+        "github",
+        "程序员",
+        "软件",
+        "开发者",
+        "云计算",
+        "云服务",
+        "芯片",
+        "半导体",
+        "gpu",
+        "数据中心",
+        "网络安全",
+        "开源",
+        "编程",
+        "算法",
+        "机器人",
+        "操作系统",
+        "数据库",
+        "artificial intelligence",
+        "large language model",
+        "generative ai",
+        "software",
+        "developer",
+        "cloud computing",
+        "semiconductor",
+        "chip",
+        "cybersecurity",
+        "open source",
+        "programming",
+        "robot",
+        "technology",
+        "テクノロジー",
+        "人工知能",
+        "ソフトウェア",
+        "半導体",
+        "サイバー",
+    ),
+    "政治": (
+        "政治",
+        "政府",
+        "国会",
+        "议会",
+        "选举",
+        "总统",
+        "首相",
+        "外交",
+        "制裁",
+        "峰会",
+        "政党",
+        "内阁",
+        "部长",
+        "外长",
+        "政策",
+        "访华",
+        "government",
+        "parliament",
+        "election",
+        "president",
+        "prime minister",
+        "diplomacy",
+        "sanction",
+        "cabinet",
+        "minister",
+        "policy",
+        "政府",
+        "国会",
+        "選挙",
+        "大統領",
+        "首相",
+        "外交",
+        "内閣",
+    ),
+    "经济": (
+        "经济",
+        "财经",
+        "金融",
+        "央行",
+        "利率",
+        "通胀",
+        "市场",
+        "股市",
+        "汇率",
+        "贸易",
+        "关税",
+        "就业",
+        "企业",
+        "投资",
+        "房地产",
+        "消费",
+        "economy",
+        "business",
+        "finance",
+        "central bank",
+        "interest rate",
+        "inflation",
+        "market",
+        "stock",
+        "trade",
+        "tariff",
+        "employment",
+        "investment",
+        "経済",
+        "金融",
+        "中央銀行",
+        "金利",
+        "市場",
+        "貿易",
+    ),
+    "日本": (
+        "日本",
+        "东京",
+        "大阪",
+        "日元",
+        "日本央行",
+        "自民党",
+        "japan",
+        "tokyo",
+        "osaka",
+        "yen",
+        "日本",
+        "東京",
+        "大阪",
+        "円",
+    ),
+    "国际": (
+        "国际",
+        "美国",
+        "欧洲",
+        "欧盟",
+        "俄罗斯",
+        "乌克兰",
+        "中东",
+        "伊朗",
+        "以色列",
+        "战争",
+        "停火",
+        "联合国",
+        "北约",
+        "美伊",
+        "伊美",
+        "international",
+        "united states",
+        "europe",
+        "russia",
+        "ukraine",
+        "middle east",
+        "iran",
+        "israel",
+        "war",
+        "ceasefire",
+        "united nations",
+        "nato",
+        "アメリカ",
+        "イラン",
+        "イスラエル",
+        "ウクライナ",
+        "ロシア",
+        "戦争",
+        "停戦",
+        "国連",
+    ),
+    "社会": (
+        "社会",
+        "教育",
+        "医疗",
+        "健康",
+        "气候",
+        "能源",
+        "灾害",
+        "地震",
+        "台风",
+        "公共安全",
+        "热浪",
+        "高温",
+        "洪水",
+        "火灾",
+        "heatwave",
+        "climate",
+        "health",
+        "earthquake",
+    ),
+}
 
 URGENT_KEYWORDS = (
     "earthquake",
@@ -160,6 +360,7 @@ class Article:
     published: datetime | None
     source: str
     category: str
+    language: str = ""
     source_weight: float = 1.0
     score: float = 0.0
     corroborating_sources: list[str] = field(default_factory=list)
@@ -213,6 +414,166 @@ def clean_text(value: str | None, limit: int | None = None) -> str:
     if limit and len(text) > limit:
         return text[: limit - 1].rstrip() + "…"
     return text
+
+
+def contains_chinese(value: str, minimum: int = 4) -> bool:
+    """Return true for Chinese text while excluding predominantly Japanese text."""
+    han_count = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", value))
+    kana_count = len(re.findall(r"[\u3040-\u30ff]", value))
+    return han_count >= minimum and kana_count <= max(2, han_count // 8)
+
+
+def headline_without_source(title: str) -> str:
+    return re.sub(r"\s+[-–—|]\s+[^-–—|]{2,40}$", "", title).strip()
+
+
+def classify_category(article: Article) -> str:
+    title = article.title.lower()
+    summary = article.summary.lower()
+    for category in CATEGORY_CLASSIFICATION_ORDER:
+        if any(keyword in title for keyword in CATEGORY_KEYWORDS[category]):
+            return category
+    if article.category in CATEGORY_ORDER and article.category != "社会":
+        return article.category
+    for category in CATEGORY_CLASSIFICATION_ORDER:
+        if any(keyword in summary for keyword in CATEGORY_KEYWORDS[category]):
+            return category
+    if article.category in CATEGORY_ORDER:
+        return article.category
+    return "社会"
+
+
+def build_chinese_summary(article: Article, limit: int = 180) -> str:
+    """Clean an already translated Chinese summary."""
+    title = headline_without_source(article.title)
+    summary = clean_text(article.summary)
+    summary = summary.replace("查看更多相关报道", "").strip()
+    summary = summary.replace("在Google 新闻上查看更多头条新闻和观点", "").strip()
+    summary = summary.replace("在 Google 新闻上查看更多头条新闻和观点", "").strip()
+    summary = re.sub(
+        r"See more headlines.*?Google News",
+        "",
+        summary,
+        flags=re.IGNORECASE,
+    ).strip()
+    for duplicate in (article.title, title):
+        if duplicate and summary.startswith(duplicate):
+            summary = summary[len(duplicate) :].strip(" -–—|：:")
+    summary = clean_text(summary, limit)
+    if contains_chinese(summary, minimum=10):
+        return summary
+    return clean_text(f"这则新闻聚焦“{title}”，详情请点击标题查看原文。", limit)
+
+
+def prepare_articles(articles: Iterable[Article]) -> list[Article]:
+    prepared: list[Article] = []
+    for article in articles:
+        article.title = clean_text(article.title, 180)
+        article.category = classify_category(article)
+        prepared.append(article)
+    return prepared
+
+
+def truncate_utf8(value: str, max_bytes: int = 480) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[: max_bytes - 3].decode("utf-8", errors="ignore").rstrip() + "…"
+
+
+def infer_language(article: Article) -> str:
+    if article.language:
+        return article.language
+    if contains_chinese(article.title):
+        return "zh-CN"
+    if re.search(r"[\u3040-\u30ff]", article.title):
+        return "ja"
+    return "en"
+
+
+def translate_text_mymemory(
+    text: str,
+    *,
+    source_language: str,
+    contact_email: str = "",
+    timeout: int = 20,
+    retries: int = 3,
+) -> str:
+    text = truncate_utf8(clean_text(text))
+    if not text:
+        return ""
+    if source_language.lower().startswith("zh") and contains_chinese(text):
+        return text
+
+    params = {
+        "q": text,
+        "langpair": f"{source_language}|zh-CN",
+        "mt": "1",
+    }
+    if contact_email:
+        params["de"] = contact_email
+    url = "https://api.mymemory.translated.net/get?" + urlencode(params)
+    last_error: Exception | None = None
+    for attempt in range(retries):
+        try:
+            request = Request(
+                url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json",
+                },
+            )
+            with urlopen(request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            translated = clean_text(
+                payload.get("responseData", {}).get("translatedText", "")
+            )
+            status = payload.get("responseStatus", 200)
+            if status != 200 or not translated:
+                details = payload.get("responseDetails") or "翻译 API 返回空结果"
+                raise RuntimeError(str(details))
+            if not contains_chinese(translated, minimum=2):
+                raise RuntimeError("翻译结果不是中文")
+            return translated
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < retries:
+                time.sleep(attempt + 1)
+    raise RuntimeError(f"MyMemory 翻译失败：{last_error}")
+
+
+def translate_articles_to_chinese(
+    articles: Iterable[Article],
+    *,
+    contact_email: str = "",
+    timeout: int = 20,
+) -> list[Article]:
+    translated_articles: list[Article] = []
+    for article in articles:
+        source_language = infer_language(article)
+        original_title = headline_without_source(article.title)
+        original_summary = clean_text(article.summary, 320)
+        article.title = translate_text_mymemory(
+            original_title,
+            source_language=source_language,
+            contact_email=contact_email,
+            timeout=timeout,
+        )
+        if original_summary:
+            article.summary = translate_text_mymemory(
+                original_summary,
+                source_language=source_language,
+                contact_email=contact_email,
+                timeout=timeout,
+            )
+        else:
+            article.summary = ""
+        article.summary = build_chinese_summary(article)
+        if not contains_chinese(article.title) or not contains_chinese(article.summary):
+            raise RuntimeError(f"《{original_title}》未能生成完整中文内容")
+        translated_articles.append(article)
+        LOGGER.info("已翻译：%s", article.title)
+    return translated_articles
 
 
 def safe_url(value: str | None) -> str:
@@ -301,6 +662,7 @@ def parse_feed(data: bytes, source: FeedSource) -> list[Article]:
                 published=published,
                 source=source.name,
                 category=source.category,
+                language=source.language,
                 source_weight=source.weight,
             )
         )
@@ -427,7 +789,34 @@ def rank_and_deduplicate(
     selected: list[Article] = []
     selected_by_source: dict[str, int] = {}
     selected_by_category: dict[str, int] = {}
+
+    # First reserve one strong article for every available category.
+    for category in CATEGORY_ORDER:
+        article = next(
+            (
+                candidate
+                for candidate in unique
+                if candidate.category == category
+                and candidate not in selected
+                and (
+                    not max_selected_per_source
+                    or selected_by_source.get(candidate.source, 0)
+                    < max_selected_per_source
+                )
+            ),
+            None,
+        )
+        if article is None:
+            continue
+        selected.append(article)
+        selected_by_source[article.source] = selected_by_source.get(article.source, 0) + 1
+        selected_by_category[article.category] = 1
+        if len(selected) >= max_items:
+            return selected
+
     for article in unique:
+        if article in selected:
+            continue
         source_count = selected_by_source.get(article.source, 0)
         category_count = selected_by_category.get(article.category, 0)
         if max_selected_per_source and source_count >= max_selected_per_source:
@@ -488,34 +877,42 @@ def build_plain_text(articles: list[Article], now: datetime, tz: ZoneInfo) -> st
         f"每日重要新闻 · {now.astimezone(tz):%Y-%m-%d}",
         "",
     ]
-    for index, article in enumerate(articles, start=1):
-        sources = [article.source, *article.corroborating_sources]
-        lines.extend(
-            [
-                f"{index}. [{article.category}] {article.title}",
-                f"   来源：{'、'.join(sources)} · {format_local_time(article.published, tz)}",
-                f"   {article.summary}" if article.summary else "",
-                f"   {article.url}",
-                "",
-            ]
-        )
+    index = 1
+    for category in CATEGORY_ORDER:
+        category_articles = [item for item in articles if item.category == category]
+        if not category_articles:
+            continue
+        lines.extend([f"【{category}】", ""])
+        for article in category_articles:
+            sources = [article.source, *article.corroborating_sources]
+            lines.extend(
+                [
+                    f"{index}. {article.title}",
+                    f"   摘要：{article.summary}",
+                    f"   来源：{'、'.join(sources)} · {format_local_time(article.published, tz)}",
+                    f"   原文：{article.url}",
+                    "",
+                ]
+            )
+            index += 1
     lines.append("本邮件由 GitHub Actions 自动生成。")
     return "\n".join(line for line in lines if line is not None)
 
 
 def build_html(articles: list[Article], now: datetime, tz: ZoneInfo) -> str:
-    cards: list[str] = []
-    for index, article in enumerate(articles, start=1):
-        sources = [article.source, *article.corroborating_sources]
-        source_text = "、".join(sources)
-        summary = (
-            f'<p style="margin:10px 0 0;color:#3f4654;line-height:1.65;">'
-            f"{html.escape(article.summary)}</p>"
-            if article.summary
-            else ""
-        )
-        cards.append(
-            f"""
+    sections: list[str] = []
+    index = 1
+    for category in CATEGORY_ORDER:
+        category_articles = [item for item in articles if item.category == category]
+        if not category_articles:
+            continue
+        color = CATEGORY_COLORS[category]
+        cards: list[str] = []
+        for article in category_articles:
+            sources = [article.source, *article.corroborating_sources]
+            source_text = "、".join(sources)
+            cards.append(
+                f"""
             <tr>
               <td style="padding:0 0 14px;">
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0"
@@ -523,14 +920,16 @@ def build_html(articles: list[Article], now: datetime, tz: ZoneInfo) -> str:
                   <tr>
                     <td style="padding:18px 20px;">
                       <div style="font-size:12px;color:#6b7280;margin-bottom:8px;">
-                        {index:02d} · {html.escape(article.category)} ·
+                        {index:02d} ·
                         {html.escape(format_local_time(article.published, tz))}
                       </div>
                       <a href="{html.escape(article.url, quote=True)}"
                          style="font-size:18px;line-height:1.45;font-weight:700;color:#111827;text-decoration:none;">
                         {html.escape(article.title)}
                       </a>
-                      {summary}
+                      <p style="margin:10px 0 0;color:#3f4654;line-height:1.65;">
+                        <strong>摘要：</strong>{html.escape(article.summary)}
+                      </p>
                       <div style="margin-top:12px;font-size:12px;color:#808797;">
                         来源：{html.escape(source_text)}
                       </div>
@@ -539,6 +938,19 @@ def build_html(articles: list[Article], now: datetime, tz: ZoneInfo) -> str:
                 </table>
               </td>
             </tr>
+            """
+            )
+            index += 1
+        sections.append(
+            f"""
+            <tr>
+              <td style="padding:12px 4px 10px;">
+                <div style="font-size:20px;font-weight:800;color:{color};">
+                  {html.escape(category)}
+                </div>
+              </td>
+            </tr>
+            {''.join(cards)}
             """
         )
 
@@ -562,7 +974,7 @@ def build_html(articles: list[Article], now: datetime, tz: ZoneInfo) -> str:
               <div style="font-size:14px;color:#687182;">从公开新闻源筛选出的 {len(articles)} 条重点内容</div>
             </td>
           </tr>
-          {''.join(cards)}
+          {''.join(sections)}
           <tr>
             <td style="padding:12px 4px;color:#9299a8;font-size:12px;text-align:center;">
               本邮件由 GitHub Actions 自动生成 · 点击标题阅读原文
@@ -659,6 +1071,8 @@ def main() -> int:
         int(settings.get("max_selected_per_category", 4)),
     )
     timeout = env_int("NEWS_FETCH_TIMEOUT", 20)
+    translation_timeout = env_int("TRANSLATION_TIMEOUT", 20)
+    translation_email = os.getenv("TRANSLATION_EMAIL", "").strip()
     now = datetime.now(timezone.utc)
 
     all_articles: list[Article] = []
@@ -672,8 +1086,9 @@ def main() -> int:
             failures.append(source.name)
             LOGGER.warning("%s：读取失败（%s）", source.name, exc)
 
+    prepared_articles = prepare_articles(all_articles)
     articles = rank_and_deduplicate(
-        all_articles,
+        prepared_articles,
         now=now,
         lookback_hours=lookback_hours,
         max_items=max_items,
@@ -684,6 +1099,11 @@ def main() -> int:
         raise RuntimeError(
             f"没有找到近 {lookback_hours} 小时内的新闻；失败源：{', '.join(failures) or '无'}"
         )
+    articles = translate_articles_to_chinese(
+        articles,
+        contact_email=translation_email,
+        timeout=translation_timeout,
+    )
 
     plain = build_plain_text(articles, now, tz)
     rich_html = build_html(articles, now, tz)
